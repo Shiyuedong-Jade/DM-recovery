@@ -27,6 +27,8 @@
  *   node tools/peer-range.mjs --quiet    只打印结论
  *
  * 需要出网访问 registry.npmjs.org，因此**不进 CI 的常规作业**（正常 CI 保持离线，见 .github/workflows/）。
+ * 注册源可用 `PEER_RANGE_REGISTRY` 覆盖 —— 那是给"把出网失败那条分支也真跑一遍"用的
+ * （`PEER_RANGE_REGISTRY=http://127.0.0.1:1 node tools/peer-range.mjs` 应给出可读的一句话并退出 2）。
  */
 
 import fs from 'node:fs';
@@ -192,7 +194,7 @@ export function selfTest(quiet = QUIET) {
 
 /** 拉精简 packument（install-v1 比全量小很多）；网络抖动重试。 */
 async function versionsOf(name) {
-  const url = `https://registry.npmjs.org/${name.replace('/', '%2F')}`;
+  const url = `${process.env.PEER_RANGE_REGISTRY ?? 'https://registry.npmjs.org'}/${name.replace('/', '%2F')}`;
   for (let i = 1; i <= 6; i++) {
     try {
       const r = await fetch(url, { headers: { Accept: 'application/vnd.npm.install-v1+json' } });
@@ -221,8 +223,25 @@ if (IS_MAIN) {
   let failed = 0;
   for (const [name, range] of peers) {
     const lines = SUPPORTED_LINES[name] ?? [];
-    const all = await versionsOf(name);
+    // 出网失败要给一句能读懂的话，而不是甩一个裸栈：本工具本来就不进常规 CI（见文件头），
+    // 在无外网的环境里跑到这里**是预期内的**，说清楚就行。
+    let all;
+    try {
+      all = await versionsOf(name);
+    } catch (e) {
+      console.error(`\n${e.message}`);
+      console.error('本工具需要访问 registry.npmjs.org；无外网时跑不了 —— 这也是它不进常规 CI 的原因。');
+      process.exit(2);
+    }
     const sorted = all.slice().sort((a, b) => compare(parse(a), parse(b)));
+    // ★ 空响应必须当**失败**：registry 什么都没返回时，下面所有统计都会「空对空」地通过 ——
+    //   那是「没查到」，不是「全部覆盖」。这两件事在本插件里从来不许混为一谈。
+    //   （2026-10-13 补：第一次手动跑 peer-range 作业后才发现，exit 0 分不出这两种情况。）
+    if (!sorted.length) {
+      failed++;
+      console.log(`  ❌ registry 没返回任何版本 —— 这是「没查到」，不是「覆盖完整」。`);
+      continue;
+    }
     const covered = sorted.filter((v) => satisfies(v, range));
     const own = [...new Set(sorted.map((v) => `${parse(v).major}.${parse(v).minor}`))];
     const gaps = lines.flatMap((l) => sorted.filter((v) => `${parse(v).major}.${parse(v).minor}` === l && !satisfies(v, range)));
