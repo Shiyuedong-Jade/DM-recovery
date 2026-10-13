@@ -1,0 +1,32 @@
+# 本插件作为 bundle 的插入清单。
+#
+# 装法：`dsh plugin --profile web add file:<本目录绝对路径>`
+#   CLI 看到 package.json 里有 dsh.bundle.patch，会把包名自动追加进
+#   dsh.profile.bundles，并自动带上这一行。
+#
+# ⚠️ `file:` 安装路径不能含空格（`dsh plugin` 会转发给 pnpm，参数在空格处断开设）。
+#    本包在开发目录里带空格，安装前先复制到无空格路径，例如
+#    D:\dsh-plugins\dsh-plugin-dm-recovery-readiness
+#
+# 配置项（都可在行里覆盖）：
+#   host            数据库服务器 IP
+#   port            端口（DMDSC 常见 7236/7237，单实例 5236）
+#   user            账号，默认 SYSDBA
+#   credentialRef   凭据库里的引用名 —— **推荐用它，而不是把口令写进配置**
+#   home            工作目录，默认 ~/.dsh/dm-recovery-readiness
+#                   （达梦 JDBC 驱动放在 <home>/drivers 下）
+#   driverJar       直接指定驱动 jar 路径
+#   javaHome        JDK 路径（需要 javac 编译桥）
+#
+# 例：
+#   - insert:
+#       - id: dm-recovery-readiness
+#         name: 'dsh-plugin-dm-recovery-readiness'
+#         config:
+#           host: 10.127.11.61
+#           port: 7236
+#           user: sysdba
+#           credentialRef: dm_recovery_readiness_PASSWORD
+- insert:
+    - id: dm-recovery-readiness
+      name: 'dsh-plugin-dm-recovery-readiness'

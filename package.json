@@ -1,0 +1,61 @@
+{
+  "name": "dsh-plugin-dm-recovery-readiness",
+  "version": "0.1.0",
+  "description": "Dameng (DM8) recoverability assessment: whether this database can be recovered, to which point (LSN/time), and what would be lost — across 16 recovery scenarios (logical corruption, media failure, cluster/disaster), with scenario-by-scenario requirement-vs-actual comparison and targeted advice. Read-only by design: no scanning, no repair, no config changes. · 达梦数据库可恢复能力评估：这套库在 16 类恢复场景下能不能恢复、能恢复到哪一点（LSN/时间）、要丢什么，逐场景给出「要求 vs 本库实际」对照与针对性建议。只读设计：不扫描、不修复、不改配置。",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Shiyuedong-Jade/DM-recovery.git"
+  },
+  "homepage": "https://github.com/Shiyuedong-Jade/DM-recovery#readme",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "files": [
+    "lib",
+    "assets",
+    "tools",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "selftest": "node tools/triage.mjs selftest"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-tools": ">=0.0.1-rc.1 <0.1.0 || >=0.1.0-rc.1 <0.2.0-0"
+  },
+  "keywords": [
+    "deepseek",
+    "harness",
+    "dsh",
+    "dsh-plugin",
+    "dameng",
+    "dm8",
+    "达梦",
+    "可恢复能力",
+    "恢复能力评估",
+    "recoverability",
+    "pitr",
+    "rpo",
+    "坏块",
+    "坏页",
+    "数据页损坏",
+    "page-check-error",
+    "corruption",
+    "dba"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

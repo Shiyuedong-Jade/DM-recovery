@@ -1,0 +1,9 @@
+# 一律用 LF 检出。
+#
+# 为什么必须写死：`assets/shell/*.sh` 是要拷到达梦数据库主机（Linux）上执行的，
+# 一旦带上 CR，shebang 就变成 `#!/bin/sh\r` → `bad interpreter: No such file or directory`；
+# 而且 `tools/smoke.mjs` 会断言 scan-backup-log.sh 是**纯 ASCII + 纯 LF**，
+# 在 Windows 上 clone（core.autocrlf=true）会把工作区文件换成 CRLF，把自检跑挂。
+* text=auto eol=lf
+*.sh text eol=lf
+*.java text eol=lf

@@ -1,0 +1,6 @@
+node_modules/
+.work/
+.live-home/
+.dm-home/
+dm-recovery-reports/
+*.log
