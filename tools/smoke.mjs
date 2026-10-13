@@ -1931,7 +1931,21 @@ ok(typeof pkg.dsh?.bundle?.patch === 'string', '声明了 dsh.bundle.patch');
 ok((await import('node:fs')).existsSync(path.join(PKG, pkg.dsh.bundle.patch)), 'patch 文件存在');
 ok(pkg.type === 'module', 'type = module');
 ok(!Object.keys(pkg.dependencies ?? {}).some((d) => d.startsWith('@deepseek-ai/')), '官方包不在 dependencies');
-ok(pkg.description.includes('·'), '描述为中英双语');
+ok(/dm_recovery_readiness/.test(pkg.description) && pkg.description.endsWith('。'), '描述点名工具名、以句号结尾');
+
+// ★ 2026-10-13 按同族格式重构 README 时加的护栏：README 里的两张表必须覆盖**真实的**参数与 action。
+//   「文档声称的」与「代码里有的」不一致，是这几轮一直在修的一类缺陷（12 个域 / peer 范围 / 需求参数），
+//   靠人比对迟早再漏一次 —— 所以让自检来比。
+// 用一个块把变量关起来：本文件里 `readmeSrc` / `paramNames` 这类名字已被别处占用（踩过两次）。
+{
+  const doc = (await import('node:fs')).readFileSync(path.join(PKG, 'README.md'), 'utf8');
+  const names = Object.keys(p.properties);
+  const miss = names.filter((n) => !doc.includes('`' + n + '`'));
+  ok(miss.length === 0, `README 覆盖全部 ${names.length} 个调用参数（缺：${miss.join('、') || '无'}）`);
+  const acts = p.properties.action.enum;
+  const missA = acts.filter((a) => !doc.includes('`' + a + '`'));
+  ok(missA.length === 0, `README 覆盖全部 ${acts.length} 个 action（缺：${missA.join('、') || '无'}）`);
+}
 
 // ★ 真机回归（DMDSC 实测输出）：ASM 路径下 dmrman 够不到备份集，
 //   **绝不能**判成「备份损坏」—— 那会把「工具够不着」谎报成「备份坏了」。
