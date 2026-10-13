@@ -25,6 +25,7 @@
     "assets",
     "tools",
     "cordis.patch.yml",
+    "screenshots.json",
     "README.md",
     "LICENSE"
   ],
@@ -34,7 +35,9 @@
   "scripts": {
     "smoke": "node tools/smoke.mjs",
     "selftest": "node tools/triage.mjs selftest",
-    "live": "node tools/live-check.mjs"
+    "live": "node tools/live-check.mjs",
+    "peer-range": "node tools/peer-range.mjs",
+    "shots": "node tools/shots.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=4.0.1-0 <4.1.0-0 || >=4.0.5-0 <4.1.0-0",

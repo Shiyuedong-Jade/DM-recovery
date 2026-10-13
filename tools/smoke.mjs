@@ -17,6 +17,30 @@ const ok = (c, m) => {
   if (!c) failed++;
 };
 
+/**
+ * 依赖桩：`@deepseek-ai/dsh-tools` 是 **peerDependency**（由 DSH 宿主提供，不随包分发）。
+ *
+ * 为什么需要这一步：`lib/index.js` 在模块顶层 `import { defineTool } from '@deepseek-ai/dsh-tools'`，
+ * 而在**没有 node_modules 的环境**（CI、刚 clone、`npm pack` 解包后）这个 import 会直接
+ * ERR_MODULE_NOT_FOUND —— **自检本身就跑不起来**。这里只在「确实没装」时写一个最小桩。
+ *
+ * 代价：桩不编译参数 DSL（`defineTool = t => t`），所以「编译后形状」那几条断言在桩模式下
+ * 要改验**我们自己声明的 DSL**（下面用 `compiled` 区分）。本地装了真依赖时照旧验编译产物。
+ * 这两条路都要能绿 —— 否则本地装了依赖会把 CI 上的失败一直盖住。
+ */
+const fsStub = await import('node:fs');
+const stubDir = path.join(PKG, 'node_modules', '@deepseek-ai', 'dsh-tools');
+const hasRealDeps = fsStub.existsSync(path.join(stubDir, 'package.json'));
+if (!hasRealDeps) {
+  fsStub.mkdirSync(stubDir, { recursive: true });
+  fsStub.writeFileSync(
+    path.join(stubDir, 'package.json'),
+    JSON.stringify({ name: '@deepseek-ai/dsh-tools', version: '0.0.0-stub', type: 'module', main: 'index.js' }, null, 2),
+  );
+  fsStub.writeFileSync(path.join(stubDir, 'index.js'), '// 自检用最小桩（仅缺依赖时生成，node_modules 不入库）\nexport const defineTool = (t) => t;\n');
+  console.log('  [信息] 未检测到 @deepseek-ai/dsh-tools，已写入最小桩（仅本次自检使用）');
+}
+
 console.log('\n=== 1. 插件契约形状 ===');
 const plugin = await import(pathToFileURL(path.join(PKG, 'lib', 'index.js')).href);
 ok(typeof plugin.apply === 'function', 'apply 是函数');
@@ -43,11 +67,16 @@ const isRequired = (schema, name) =>
   Array.isArray(schema?.required) ? schema.required.includes(name) : schema?.properties?.[name]?.required === true;
 
 const p = registered.parameters;
-ok(p?.type === 'object', '编译后参数是 object');
-ok(Array.isArray(p?.required) && p.required.includes('action'), 'action 为必填（编译后 required 数组含 action）');
+/**
+ * `defineTool` 会把参数 DSL **编译成 JSON Schema**；但缺依赖时用的是上面的最小桩
+ * （`defineTool = t => t`），拿到的就是**我们声明的原始 DSL**。两种形状都要认。
+ */
+const compiled = !!p?.properties;
+const specOf = (name) => (compiled ? p.properties[name] : p[name]);
+ok(!compiled || p.type === 'object', `参数是 object（${compiled ? '编译产物' : '桩模式下验原始 DSL'}）`);
+ok(compiled ? p.required.includes('action') : p.action.required === true, 'action 为必填');
 ok(
-  Array.isArray(p?.properties?.action?.enum) &&
-    p.properties.action.enum.join() === 'list,readiness,triage,capacity,backup,report',
+  (specOf('action')?.enum ?? []).join() === 'list,readiness,triage,capacity,backup,report',
   'action 允许 list / readiness / triage / capacity / backup / report',
 );
 ok(typeof registered.output?.render === 'function', '提供 output.render');
@@ -1939,12 +1968,27 @@ ok(/dm_recovery_readiness/.test(pkg.description) && pkg.description.endsWith('�
 // 用一个块把变量关起来：本文件里 `readmeSrc` / `paramNames` 这类名字已被别处占用（踩过两次）。
 {
   const doc = (await import('node:fs')).readFileSync(path.join(PKG, 'README.md'), 'utf8');
-  const names = Object.keys(p.properties);
+  const names = compiled ? Object.keys(p.properties) : Object.keys(p);
   const miss = names.filter((n) => !doc.includes('`' + n + '`'));
   ok(miss.length === 0, `README 覆盖全部 ${names.length} 个调用参数（缺：${miss.join('、') || '无'}）`);
-  const acts = p.properties.action.enum;
+  const acts = specOf('action').enum;
   const missA = acts.filter((a) => !doc.includes('`' + a + '`'));
   ok(missA.length === 0, `README 覆盖全部 ${acts.length} 个 action（缺：${missA.join('、') || '无'}）`);
+
+  // ★ peer 范围：本包声明的是一串**枚举**，宿主发新元组时会静默失效（失效时没有任何报错）。
+  //   离线能跑的那半在这里 —— semver 子集的语义自证，用例期望值对着真 semver 7.7.4 逐条核过；
+  //   联网比 registry 的那半在 tools/peer-range.mjs，由 .github/workflows/peer-range.yml 每周跑。
+  const pm = await import(pathToFileURL(path.join(PKG, 'tools', 'peer-range.mjs')).href);
+  ok(pm.selfTest(true), `peer 范围自检的 semver 语义自证通过（${pm.SEMVER_CASES.length} 条用例，期望值对着真 semver 核过）`);
+  const peers = pkg.peerDependencies ?? {};
+  ok(pm.satisfies('0.1.5-rc.2', peers['@deepseek-ai/dsh-tools'] ?? ''), '★ 声明的 dsh-tools 范围覆盖 0.1.5-rc.2（已发布版本，曾经漏掉它）');
+  ok(pm.satisfies('4.0.5-alpha.1', peers['@deepseek-ai/cordis'] ?? ''), '★ 声明的 cordis 范围覆盖 4.0.5-alpha.1（4.0 线最新预发布）');
+
+  // ★ `screenshots.json` 里的相对路径必须真的存在 —— 插件市场按它取图，
+  //   路径写错在仓库里看不出来，只会让详情页缺图（contributing.md 明确要求相对路径指向仓库里已有的图）。
+  const shotsList = JSON.parse(fsStub.readFileSync(path.join(PKG, 'screenshots.json'), 'utf8'));
+  const shotsMissing = shotsList.filter((rel) => !fsStub.existsSync(path.join(PKG, rel)));
+  ok(shotsList.length > 0 && shotsMissing.length === 0, `screenshots.json 声明的 ${shotsList.length} 张报告截图都在仓库里（缺：${shotsMissing.join('、') || '无'}）`);
 }
 
 // ★ 真机回归（DMDSC 实测输出）：ASM 路径下 dmrman 够不到备份集，

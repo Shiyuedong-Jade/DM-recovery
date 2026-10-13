@@ -1,0 +1,33 @@
+# 离线自检：不连数据库、不需要达梦 JDBC 驱动、不需要 JDK。
+#
+# 为什么这样就够：`tools/smoke.mjs` 覆盖插件契约、调用参数与 action 跟 README 的一致性、
+# 结果信封、报告版式（含目录锚点与「返回目录」），外加两个离线判定自检。
+# 真机脚本（live-check / live-smoke / page-chain-check / check-backup / run-action）需要真实达梦
+# 环境与口令，**不在 CI 里跑**。
+#
+# 不装任何依赖：`@deepseek-ai/dsh-tools` 是 peer（由宿主提供），smoke.mjs 在缺依赖时自己写最小桩，
+# 所以自检**零依赖可跑** —— 本地「有依赖」与「无依赖」两条路都实测全通过。
+name: smoke
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - name: 离线自检（契约 / 信封 / 报告版式 / 文档一致性 / peer 语义）
+        run: node tools/smoke.mjs
+      - name: 判定逻辑自检
+        run: node tools/triage.mjs selftest

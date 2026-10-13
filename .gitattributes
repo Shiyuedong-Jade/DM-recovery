@@ -7,3 +7,7 @@
 * text=auto eol=lf
 *.sh text eol=lf
 *.java text eol=lf
+
+# 报告截图必须**逐字节**原样进仓库：靠 `text=auto` 的启发式识别二进制不够稳，
+# 万一被判成文本，换行规范化会把 PNG 改坏（坏掉的图在市场里就是个空框，而且看不出来是仓库的问题）。
+*.png binary

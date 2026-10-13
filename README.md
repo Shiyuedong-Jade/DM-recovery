@@ -190,6 +190,8 @@ dm-recovery-<库名>-<时间戳>.findings.json   ← 给机器用：信封去掉
 
 DMDSC 多节点时报告里会多出节点核对的内容；报告默认输出到插件工作目录下的 `dm-recovery-reports`，不是 dsh 进程的启动目录。
 
+README 与插件市场里展示的报告截图（`assets/screenshot-*.png`）由 `node tools/shots.mjs` 从一份**真实报告**生成：**先脱敏、再出图**；脱敏后若还残留真实 IP、账号或内部文档引用，工具会**拒绝出图**。截图清单见 `screenshots.json`。
+
 ## OS 访问（可选）：三条只读命令
 
 不给 `sshHost` 时插件是纯 JDBC 只读的，一次主机命令都不执行。给了之后，它会在数据库主机上执行**三条固定形态的只读命令**，把库内查不到的东西取回来：
@@ -245,6 +247,7 @@ dsh plugin --profile web remove dsh-plugin-dm-recovery-readiness
 ```
 ├── package.json              插件清单
 ├── cordis.patch.yml          作为 bundle 的插入清单
+├── screenshots.json          报告截图清单（插件市场详情页用）
 ├── lib/
 │   ├── index.js              插件入口：注册 dm_recovery_readiness 工具、解析参数与口令
 │   ├── bridge.js             Node 与 Java 之间的只读桥
@@ -261,9 +264,13 @@ dsh plugin --profile web remove dsh-plugin-dm-recovery-readiness
 │   └── ossh.js               可选的主机侧只读采集，命令只能由本模块的构造函数产生
 ├── assets/
 │   ├── java/DmQuery.java     只读查询桥源码
+│   ├── screenshot-*.png      报告截图，由 tools/shots.mjs 生成
 │   └── shell/
 │       ├── scan-backup-log.sh  日志扫描：备份证据与全库逐页裁决（插件会调用）
 │       └── find-dm-logs.sh     日志发现（人工执行；插件当前不用它）
+├── .github/workflows/
+│   ├── ci.yml                离线自检（不连库、不装依赖）
+│   └── peer-range.yml        每周核对 peer 范围是否落后于 registry（需联网）
 └── tools/                    开发与自检脚本
 ```
 
@@ -272,17 +279,18 @@ dsh plugin --profile web remove dsh-plugin-dm-recovery-readiness
 ```sh
 node tools/smoke.mjs                  # 离线自检：契约形状、安全边界、报告版式；不连库、不需要驱动（条数自己打印）
 node tools/triage.mjs selftest        # 判定逻辑自检（含时间比对、反复损坏检测）
-node tools/archive-selftest.mjs       # 归档参数与增长速率的离线自检
+node tools/peer-range.mjs             # 核对 peer 范围是否还覆盖 registry 上已发布的版本（需联网）
 node tools/check-backup.mjs           # 连真实库跑一次 backup 动作
 node tools/run-action.mjs             # 任意 action 的真机运行器，支持 --out-dir、--dmrman-dcr-ini
 node tools/live-check.mjs report      # 连真实库打印信封本体与正文
 node tools/live-smoke.mjs             # 真机回归：六个 action × 信封不变量 × 交付物形状 × 口令不落盘
 node tools/page-chain-check.mjs       # 坏页链路真机半验证，18 项断言（注入页 × 真机数据）
+node tools/shots.mjs                  # 从 reports/ 下的报告生成 assets/screenshot-*.png（本机需 Edge / Chrome）
 ```
 
 真机脚本的口令只从环境变量读，不进命令行：`DM_HOST`、`DM_USER`、`DM_PASSWORD`，DMDSC 另给 `DM_TARGETS`；主机侧核验另给 `SSH_HOST`、`SSH_USER`、`SSH_PASSWORD`、`SSH_HOST_KEY`、`DMRMAN_DCR_INI`、`SSH_LOG_DIR`。`live-smoke.mjs` 的退出码：0 通过、1 断言失败、2 环境不可用。
 
-改 `peerDependencies` 时留意 `@deepseek-ai/*` 的预发布版本：node-semver 只在范围里存在**与该版本同元组、且自身带预发布标签**的比较符时才放行，写得太宽或太窄都会静默漏掉版本，用户装的时候才会看到 peer 告警。
+改 `peerDependencies` 时留意 `@deepseek-ai/*` 的预发布版本：node-semver 只在范围里存在**与该版本同元组、且自身带预发布标签**的比较符时才放行，写得太宽或太窄都会静默漏掉版本，用户装的时候才会看到 peer 告警。范围里是一条条枚举（覆盖 0.1.0~0.1.7 每个元组），**宿主发新元组就会静默失效** —— 所以改完跑一次 `node tools/peer-range.mjs`（它把 registry 上已发布的版本逐个比一遍）；`.github/workflows/peer-range.yml` 每周也会自动跑一次。
 
 ## 许可证
 

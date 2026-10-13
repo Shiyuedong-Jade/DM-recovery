@@ -3,4 +3,5 @@ node_modules/
 .live-home/
 .dm-home/
 dm-recovery-reports/
+reports/
 *.log
