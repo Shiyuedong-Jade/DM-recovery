@@ -24,8 +24,8 @@
 - 16 个恢复场景，分三组覆盖：逻辑损坏 5 项（单条记录误删误改、整表误 DROP / TRUNCATE、整表批量误 UPDATE、schema 被 DROP、表结构误改）、物理损坏 8 项（单数据页、单数据文件、控制文件、联机日志、归档日志、备份集、整机与存储、表空间）、集群容灾 3 项（DMDSC 单节点故障、全集群故障、站点级灾难）
 - 每个场景给出五档能力判定：可恢复 / 仅能粗粒度恢复 / 不可恢复 / 无法判定 / 不适用，并附一张「要求 vs 本库实际」条件表，只对未满足的条件给建议
 - 回答「能恢复到哪一点」：归档链**逐段核对**（逐段验 `next.ARCH_LSN === prev.CLSN + 1`，再看并集有无洞）、未归档尾部、可回溯窗口的时间起点、时间 ↔ LSN 双向夹逼
-- 备份可用性核对：库里有哪些备份集、能恢复到哪一点、备份本身可不可信，并核对调用方自行提供的备份位置
-- 支持 DMDSC 逐节点核对：节点间参数配置差异、坏页归属、归档目录自足性（实测交叉配置下两个归档目录各自都不自足）
+- 备份可用性核对：库里有哪些备份集、能恢复到哪一点、备份本身可不可信，并核对调用方自行提供的备份位置。校验目标按「账本 → 磁盘上找到的备份集 → 调用方给的 `backupPath`」三档取；**一个都取不到时也出结论**（说明三个来源为何都不可用），不静默省略这一节 —— 备份集在 ASM 上时 `find` 本来就够不到，`backupPath` 是账本为空时唯一的位置线索
+- 支持 DMDSC 逐节点核对：节点间参数配置差异、坏页归属、归档目录自足性（实测交叉配置下两个归档目录各自都不自足）。集群口径上还有两点：①「本节点备份日志里没有 `N corrupted pages during backup`」属正常形态（全备只由其中一个节点发起），别的节点已给出裁决时判提示而非警告；② `ARCH_HANG_FLAG` 的解读同时覆盖 LOCAL 与 REMOTE 目标 —— REMOTE 取 0 意味着对端不可达时**静默放弃投递**，那份归档冗余会悄悄失效
 - 可选的主机侧只读核验（SSH）：`dmrman CHECK BACKUPSET`、备份日志的全库逐页裁决、备份文件查找
 - 输出单文件 HTML 报告，同目录另存一份内容相同的 `findings.json`
 - 库内 SQL 均为查询语句，主机侧只执行 3 类只读命令。不扫描、不修复、不改配置
@@ -107,8 +107,8 @@ dsh plugin --profile web add file:/path/to/dsh-plugin-dm-recovery-readiness
 | `sampleSec` | integer | — | 已废弃、不再使用，保留仅为兼容旧调用 |
 | `sshHost` | string | — | 主机侧核验的数据库主机。不给则不做任何 OS 级检查，插件保持纯 JDBC 只读 |
 | `sshPort` | integer | `22` | SSH 端口 |
-| `sshUser` | string | — | SSH 账号（通常 `dmdba` 或 `root`） |
-| `sshPassword` | string | — | SSH 口令。会写入会话日志，建议改用凭据库 |
+| `sshUser` | string | — | SSH 账号（通常 `dmdba` 或 `root`）。多节点用逗号分隔且与 `targets` 同序，只给一个值时所有节点共用 |
+| `sshPassword` | string | — | SSH 口令。会写入会话日志，建议改用凭据库。多节点用逗号分隔且与 `targets` 同序；这一项不按空格拆分（口令里可以有空格） |
 | `sshHostKey` | string | — | 主机密钥指纹（形如 `ssh-ed25519 255 SHA256:...`）。plink 在 `-batch` 模式下要求密钥已知，不给会在确认处中止 |
 | `plinkPath` | string | `plink` | plink 可执行文件路径 |
 | `dmrmanPath` | string | `dmrman` | 主机上 dmrman 的路径，默认走 PATH |

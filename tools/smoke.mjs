@@ -1328,6 +1328,110 @@ ok(
   '★ 两个 action 都把 osFind 传给 runBackupsetCheck（漏了就退回「账本为空不校验」）',
 );
 
+// ============================================================ 8d. DMDSC 相关的四处修复（2026-10-14 真机）
+console.log('\n=== 8d. DMDSC：目标缺失 / 逐节点凭据 / 集群日志口径 / 归档参数解读 ===');
+
+// ① 配了 OS 访问却没有可校验的目标 → **不再静默跳过**
+//    背景：ASM 部署下 `find` 够不到备份集（ASM 不是文件系统），账本为空时唯一的线索就是 backupPath。
+//    旧实现直接 return null → 报告里「备份可用性 —— OS 级实测」**整节不出现**，
+//    读者只能理解为"插件没查"或"没问题"，而事实是"没法查"。
+{
+  const noTarget = await plugin.runBackupsetCheck({
+    args: { sshHost: '10.0.0.1', sshUser: 'root', sshPassword: 'p' },
+    cfg: {},
+    backups: [],
+    supplied: null,
+    osFind: null,
+  });
+  ok(Array.isArray(noTarget) && noTarget.length === 1, '★ 配了 SSH 但没有可校验目标 → 仍出结论（不再静默省略整节）');
+  ok(noTarget?.[0]?.verdict?.state === 'unknown', '该结论是 unknown（没查 ≠ 通过，也不谎报成 bad）');
+  ok(/没有可校验的备份集路径/.test(noTarget?.[0]?.verdict?.detail ?? ''), '并说清三个来源为何都取不到');
+  ok(/ASM/.test(noTarget?.[0]?.verdict?.detail ?? ''), '★ 点明「备份集在 ASM 上时 find 本来就够不到」这个固有限制');
+  ok(/backupPath/.test(noTarget?.[0]?.verdict?.detail ?? ''), '给出可执行的下一步：用 backupPath 指明位置');
+  ok(
+    (await plugin.runBackupsetCheck({ args: {}, cfg: {}, backups: [], supplied: null, osFind: null })) === null,
+    '没配 SSH 时仍然静默跳过 —— 不因为没有 OS 访问而产生噪音',
+  );
+}
+
+// ② SSH 账号 / 口令逐节点，且**口令不按空格拆分**
+//    DMDSC 上两节点的运维口令未必相同；口令里还可以有空格，按空白切会把它切坏
+//    （切坏后的现象与"口令错"一模一样，排起来要命）。
+{
+  const key = 'ssh-ed25519 255 SHA256:AAAABBBB';
+  const sc = plugin.sshConfigOf({
+    args: {
+      sshHost: '10.0.0.1,10.0.0.2',
+      sshUser: 'root,admin',
+      sshPassword: 'p w1,p w2',
+      sshHostKey: `${key},SHA256:CCCC`,
+    },
+    cfg: {},
+  });
+  ok(sc?.nodes?.length === 2, 'sshConfigOf 按 sshHost 拆出 2 个节点');
+  ok(sc.nodes[0].user === 'root' && sc.nodes[1].user === 'admin', '★ sshUser 支持逐节点（逗号列表）');
+  ok(sc.nodes[0].password === 'p w1' && sc.nodes[1].password === 'p w2', '★ sshPassword 逐节点，且**口令里的空格原样保留**');
+  ok(sc.nodes[0].hostKey === key, '主机密钥（含空格）同样逐节点原样保留');
+  const one = plugin.sshConfigOf({ args: { sshHost: 'h1,h2', sshUser: 'root', sshPassword: 'p' }, cfg: {} });
+  ok(one.nodes.every((n) => n.user === 'root' && n.password === 'p'), '只给一个值时所有节点共用（既有行为不变）');
+  ok(plugin.sshConfigOf({ args: { sshHost: 'h1', sshUser: 'root' }, cfg: {} }) === null, '只给账号不给口令 → 整体不做主机侧采集');
+}
+
+// ③ 集群上「本节点没有全备页计数行」不该判成警告
+//    `N corrupted pages during backup` 是**备份事件的属性**：全备在哪个节点发起就只写在那个节点的
+//    `dm_BAKRES_*.log` 里。真机实测 10.127.11.61/62：dsc01 判 clean(0)，dsc02 的 BAKRES 里
+//    根本没有 backup 语句 —— 旧实现把 dsc02 判成**警告**，读起来像"62 有问题"。
+{
+  const scan = (label, state, count) => ({
+    label,
+    command: 'sh /s.sh /l',
+    res: null,
+    verdict: {
+      state,
+      count,
+      detail: state === 'unknown' ? '既没有 `N corrupted pages during backup`…也没有页校验失败记录' : '最近 2 次全备均报告 0 corrupted pages',
+    },
+  });
+  const fs2 = plugin.osFindingsOf({ osCheck: null, osLogScan: [scan('dsc01', 'clean', 0), scan('dsc02', 'unknown', null)], osFind: null });
+  const f62 = fs2.find((x) => String(x.id).includes('dsc02'));
+  ok(f62?.level === 'info', '★ 别的节点已给出裁决时，本节点「无记录」判**提示**（旧实现是警告）');
+  ok(/集群上这属正常/.test(f62?.detail ?? ''), '并说明原因：全备只由其中一个节点发起');
+  const fs1 = plugin.osFindingsOf({ osCheck: null, osLogScan: [scan('a', 'unknown', null), scan('b', 'unknown', null)], osFind: null });
+  ok(fs1.every((x) => x.level === 'warn'), '一个节点都没给出裁决时仍然保持警告 —— 那才是真的未知');
+  ok(
+    plugin.osFindingsOf({ osCheck: null, osLogScan: [scan('only', 'unknown', null)], osFind: null })[0].level === 'warn',
+    '单节点且无记录 → 仍然警告（这条改动只针对集群）',
+  );
+  ok(
+    plugin.osFindingsOf({ osCheck: null, osLogScan: [scan('dsc01', 'corrupt', 3), scan('dsc02', 'unknown', null)], osFind: null }).find((x) =>
+      String(x.id).includes('dsc01'),
+    )?.level === 'crit',
+    '真有损坏页时仍然是严重 —— 降级只针对「无记录」那一侧',
+  );
+}
+
+// ④ 归档参数解读：主语错位 + REMOTE 目标没解读
+//    旧文案把 ARCH_HANG_FLAG 的 0/1/2 挂在 `ARCH_SPACE_LIMIT` 名下说，
+//    而 ARCH_SPACE_LIMIT=0 在达梦里表示**不限制**；真机两个目标的上限恰好都是 0，
+//    照旧文案读会得出「归档会静默缺失」的假结论（同一份输出里 recommendArchiveParams 又写着 0=不限制）。
+{
+  const txt = String(
+    plugin.renderArchiveParams({
+      items: [],
+      destinations: [
+        { name: 'ARCHIVE_LOCAL1', type: 'LOCAL', dest: '+DMDATA/DSC01/arch', fileSizeMB: 128, spaceLimit: 0, valid: 'Y', hangFlag: 1 },
+        { name: 'ARCH_REMOTE1', type: 'REMOTE', dest: 'DSC02', fileSizeMB: 1024, spaceLimit: 0, valid: 'Y', hangFlag: 0 },
+      ],
+    }),
+  );
+  ok(!/本库 `ARCH_SPACE_LIMIT` 的语义/.test(txt), '★ 不再把 ARCH_HANG_FLAG 的取值挂在 `ARCH_SPACE_LIMIT` 名下（真机上会读出假结论）');
+  ok(/取 0 在达梦里表示「不限制」/.test(txt), '明确写出 `ARCH_SPACE_LIMIT = 0` 表示**不限制**');
+  ok(/ARCH_REMOTE1（远端投递失败时）/.test(txt), '★ REMOTE 目标的 ARCH_HANG_FLAG 也解读（旧实现只取 LOCAL）');
+  ok(/静默放弃投递/.test(txt), 'REMOTE hang=0 给出「冗余会悄悄失效」的警示');
+  ok(/不代表当前投递有问题/.test(txt), '并说明这只讲失效模式、不是当前状态（避免误读成"现在就有问题"）');
+  ok(/本地归档的 `ARCH_HANG_FLAG` 都不是 1/.test(txt) === false, '本夹具本地归档是 1 → 不该触发那条「都不是 1」的告警（触发条件未被改坏）');
+}
+
 /**
  * ★ 真机实测（2026-10-12，`10.127.11.40:22`）：口令错 / 主机密钥未缓存时，
  *   plink 把原因写在 **stderr**、**stdout 为空**、几十毫秒就退出（实测 51~64ms）。
