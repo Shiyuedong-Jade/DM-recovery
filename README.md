@@ -226,7 +226,7 @@ README 与插件市场里展示的报告截图（`assets/screenshot-*.png`）由
 - 以下环境未验证：DM9、Windows 上的达梦、ARM 架构（鲲鹏 / 飞腾）。
 - 报告包含主机名、账号、目录路径与实测发现，不要提交到公开仓库或公共渠道。
 - 口令在调用卡片中填写，插件不保存、不落盘；宿主的会话日志会记录调用参数，这一点插件无法避免。
-- 开发时注意：宿主加载的是 profile 目录下的副本，改完代码要同步源码、部署副本与 profile 副本三处，再重启 `dsh web`。
+- 开发时注意：宿主加载的是 **profile 目录下的安装副本**（`$DSH_HOME/profiles/web/node_modules/dsh-plugin-dm-recovery-readiness`），仓库源码改了不会自动生效。流程是先推送，再 `dsh plugin --profile web update dsh-plugin-dm-recovery-readiness` 更新副本，最后重启 `dsh web`。这个 profile 虽然声明了 `patchReload: live`，但那只覆盖补丁文件，插件代码没有热重载通道，原因见 DESIGN §48。
 - Java 8 下首次运行会编译桥接器，产物在 `home/runtime/classes`；删除 `home/runtime/` 可清空，下次运行自动重建。
 
 ## 卸载

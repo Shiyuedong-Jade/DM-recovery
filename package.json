@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-dm-recovery-readiness",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "author": "Shiyuedong-Jade",
   "description": "达梦 DM8 数据库可恢复能力评估插件：注册 dm_recovery_readiness 工具，按 16 个恢复场景（逻辑损坏 / 物理损坏 / 集群容灾）逐项对照「要求 vs 本库实际」，给出五档能力判定与针对性建议；含归档链逐段核对、未归档尾部、可回溯起点、时间 ↔ LSN 夹逼与备份可用性核对，生成 HTML 报告与 findings.json。只读设计：不扫描、不修复、不改配置。",
@@ -27,6 +27,7 @@
     "cordis.patch.yml",
     "screenshots.json",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "engines": {
