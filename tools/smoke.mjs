@@ -172,6 +172,30 @@ ok(
   '账本为空时不抛异常，正常返回 none',
 );
 
+// ★ 回归：账本为空时 `assessBackupCoverage` 必须与正常路径**同形**。
+//   原来它对空账本提前 `return { newest, state: 'none-all' }`，于是 `redoGap` / `covered` / `span`
+//   三个键**不存在**（读出来是 undefined）。`index.js` 把 coverage 原样放进 tool 返回值，
+//   而 undefined 不是无损 JSON —— 宿主据此**拒收整个 action 的结果**：
+//   真机实测，账本为空的库上 `backup` / `report` 一律报 invalid output（HTML 其实已落盘）。
+const covEmpty = bk.assessBackupCoverage({ backups: [], curLsn: 1, archRes: null });
+ok(
+  Object.keys(covEmpty).sort().join(',') === Object.keys(covOk).sort().join(','),
+  '账本为空时覆盖度对象的**键集与正常路径完全一致**（缺键正是 undefined 漏进返回值的入口）',
+);
+ok(
+  covEmpty.redoGap === null && covEmpty.covered === null && covEmpty.span !== undefined,
+  '空账本下 redoGap / covered 显式为 null，span 也照常给出',
+);
+ok(
+  Object.values(covEmpty).every((v) => v !== undefined),
+  '账本为空时覆盖度对象里**没有任何 undefined**（无损 JSON 的前提）',
+);
+ok(covEmpty.state === 'none-all' && covOk.state === 'ok', 'state 仍按有无备份区分');
+ok(
+  covEmpty.fulls.length === 0 && covEmpty.increments.length === 0,
+  '空账本下 fulls / increments 是空数组（不是 undefined）',
+);
+
 const hit = bk.verifySuppliedPath('+DMDATA/data/dameng/bak', bkps);
 ok(hit.inCatalog === true && hit.kind === 'asm', '调用方给的 ASM 目录能命中账本');
 const miss = bk.verifySuppliedPath('/backup/db', bkps);
@@ -1248,6 +1272,62 @@ ok(osshMod.pickFindDir(['+DMDATA/data/dameng/bak']) === null, '候选全是 ASM 
 ok(osshMod.pickFindDir([]) === null && osshMod.pickFindDir(undefined) === null, '没有候选 => null');
 ok(osshMod.parseFindBackups('').state === 'unknown', 'find 无输出 => unknown（不等于「没有备份」）');
 
+// ★ 回归：账本为空时，校验目标要能从**磁盘上找到的备份文件**反推出备份集目录。
+//   原来 `runBackupsetCheck` 在 `backups` 为空时直接 `return null` —— 于是「账本为空」
+//   同时意味着「不做 dmrman 校验」。而账本为空恰恰是**最需要**校验的场景：
+//   磁盘上躺着备份集、库却不认它，到底能不能用只有 CHECK BACKUPSET 答得了（真机实测踩到）。
+ok(
+  osshMod.deriveBackupSets(['/home/dmdba/dmbak/DB_dameng_FULL_20261010_150250_003731/system.dbf.bak'])[0] ===
+    '/home/dmdba/dmbak/DB_dameng_FULL_20261010_150250_003731',
+  'deriveBackupSets：按**数据文件**命名的备份集（DMDSC 实测布局 `system.dbf.bak`）能反推出目录',
+);
+ok(
+  osshMod.deriveBackupSets([
+    '/home/dmdba/dmdbms/data/DAMENG/bak/DB_DAMENG_FULL_20261012_091257_630040/DB_DAMENG_FULL_20261012_091257_630040.bak',
+    '/home/dmdba/dmdbms/data/DAMENG/bak/DB_DAMENG_FULL_20261012_091257_630040/DB_DAMENG_FULL_20261012_091257_630040.meta',
+  ]).join() === '/home/dmdba/dmdbms/data/DAMENG/bak/DB_DAMENG_FULL_20261012_091257_630040',
+  'deriveBackupSets：按**备份集名**命名的布局（单实例实测）同样反推出目录，且同一个集只出现一次',
+);
+ok(
+  osshMod.deriveBackupSets(['/x/bak/DB_x/system.dbf.bak'])[0] === '/x/bak/DB_x',
+  'deriveBackupSets 用**父目录**判据 —— 文件不以目录名开头时也成立（前缀判据会在这里把真备份集漏掉）',
+);
+ok(
+  osshMod.deriveBackupSets([
+    '/b/DB_DAMENG_FULL_20261012_091257_630040/DB_DAMENG_FULL_20261012_091257_630040.bak',
+    '/b/DB_DAMENG_FULL_20261013_101010_111111/DB_DAMENG_FULL_20261013_101010_111111.bak',
+  ])[0] === '/b/DB_DAMENG_FULL_20261013_101010_111111',
+  'deriveBackupSets：多份备份时**最近的一份排在最前**（名字内嵌时间戳，字典序即时间序）',
+);
+ok(
+  osshMod.deriveBackupSets([]).length === 0 && osshMod.deriveBackupSets(undefined).length === 0,
+  'deriveBackupSets：没有文件 => 空数组（不猜路径）',
+);
+
+// ★ 回归：校验目标的**优先级** —— ①账本 → ②磁盘上找到的 → ③调用方给的；三者都没有才不做。
+const tgtOf = (a) => plugin.resolveCheckTarget(a);
+const tCatalog = tgtOf({
+  backups: [{ path: '/cat/SET' }],
+  supplied: { normalized: '/sup' },
+  osFind: [{ verdict: { files: ['/disk/SET/SET.bak'] } }],
+});
+ok(tCatalog.path === '/cat/SET' && tCatalog.from === 'catalog', '校验目标①：账本里有就用账本的');
+const tDisk = tgtOf({ backups: [], supplied: { normalized: '/sup' }, osFind: [{ verdict: { files: ['/disk/SET/SET.bak'] } }] });
+ok(
+  tDisk.path === '/disk/SET' && tDisk.from === 'disk-find',
+  '★ 校验目标②：**账本为空时退到磁盘上找到的备份集** —— 这正是原来被静默跳过的那一步',
+);
+ok(
+  tgtOf({ backups: [], supplied: { normalized: '/sup' }, osFind: null }).from === 'supplied',
+  '校验目标③：磁盘查找没结果时才用调用方给的 backupPath（它多半是上层目录，所以排在②后面）',
+);
+ok(tgtOf({ backups: [], supplied: null, osFind: null }) === null, '三者都没有 => null（不猜路径去撞，免得把「没校验」变成「备份坏了」）');
+ok(
+  (fsmod.readFileSync(path.join(PKG, 'lib', 'index.js'), 'utf8').match(/await runBackupsetCheck\(\{ args, cfg, backups, supplied, osFind \}\)/g) ?? [])
+    .length === 2,
+  '★ 两个 action 都把 osFind 传给 runBackupsetCheck（漏了就退回「账本为空不校验」）',
+);
+
 /**
  * ★ 真机实测（2026-10-12，`10.127.11.40:22`）：口令错 / 主机密钥未缓存时，
  *   plink 把原因写在 **stderr**、**stdout 为空**、几十毫秒就退出（实测 51~64ms）。
@@ -1466,6 +1546,45 @@ ok(sFind[1].level === null, '纯陈述项的 level 是 null（不参与分级计
 const jp = JSON.parse(res.resultJson(envSample));
 ok(!('text' in jp) && /同名 \.html/.test(jp.textOmitted), 'resultJson 省略 text 并说明原因');
 ok(jp.findings.length === 2 && jp.reportPath === '/x.html', 'resultJson 保留结论项与路径');
+
+// ★ 回归：信封必须是**无损 JSON** —— 往返后与原值**深度相等**。
+//   宿主就是这么校验的：`JSON.stringify` 会把对象里的 undefined 直接**丢键**、把 NaN / Infinity
+//   写成 null、把 Date 写成字符串。一旦发生，宿主判 "value is not lossless JSON" 并**整条结果拒收**
+//   —— 真机实测，账本为空的库上 `backup` / `report` 就是被这一条挡住的（HTML 其实已落盘，
+//   用户看到的是"插件坏了"）。这里刻意造一个带 undefined / NaN / Infinity / Date 的 result 来守它。
+const { deepStrictEqual } = await import('node:assert');
+const lossyEnv = res.buildResult({
+  action: 'backup',
+  generatedAt: '2026-10-12 10:00:00',
+  conclusion: '空账本',
+  findings: [res.finding(res.ID.backup('catalog'), 'warn', '标题', '细节', ['证据'])],
+  result: {
+    coverage: {
+      newest: null,
+      redoGap: undefined, // ← 老代码正是从这里漏出去的（空账本少了三个键）
+      covered: undefined,
+      notes: [undefined, Number.NaN, Number.POSITIVE_INFINITY, new Date('2026-10-12T10:00:00Z')],
+    },
+  },
+});
+let lossless = true;
+try {
+  deepStrictEqual(lossyEnv, JSON.parse(JSON.stringify(lossyEnv)));
+} catch {
+  lossless = false;
+}
+ok(lossless, '★ 信封是无损 JSON：往返后与原值深度相等（含键集与 NaN —— 残留 undefined 会在这里暴露）');
+ok(
+  lossyEnv.result.coverage.redoGap === null && lossyEnv.result.coverage.covered === null,
+  'undefined 在出口规整为 null（键仍保留，不会被 JSON 丢掉）',
+);
+ok(
+  lossyEnv.result.coverage.notes[0] === null &&
+    lossyEnv.result.coverage.notes[1] === null &&
+    lossyEnv.result.coverage.notes[2] === null,
+  '数组里的 undefined / NaN / Infinity 也规整为 null',
+);
+ok(lossyEnv.result.coverage.notes[3] === '2026-10-12T10:00:00.000Z', 'Date 规整为 ISO 字符串');
 
 // ★ 契约一致性：信封里的每个键都必须已在 OUTPUT_SCHEMA 声明（否则真实运行时会因 additionalProperties:false 被拒）
 const declared = Object.keys(registered.output?.schema?.properties ?? {});
@@ -2157,11 +2276,35 @@ await Promise.all([
 ]);
 const parMs = Date.now() - t0;
 ok(parMs < 550, `★ 两条 300ms 的命令并发后总耗时 ${parMs}ms（串行会是 600ms+）—— 并发真的生效了`);
-// ③ 调用点：三条命令在**两个 action** 里都是 `Promise.all`
+// ③ 调用点：两个 action 的 OS 三步**形状必须一致**。
+//    ★ 形状是**两段式**（2026-10-14 有意改动）：日志扫描与磁盘查找并发，`CHECK BACKUPSET` 排在最后。
+//    为什么不能三条一起并发：账本为空时校验目标来自 `find` 找到的那份备份集
+//    （`resolveCheckTarget` 第 ② 档），塞进同一个 `Promise.all` 就拿不到 `osFind` ——
+//    于是又退回「账本为空就跳过校验」的老毛病（真机实测：报告把 10 个场景标成
+//    "需先 `dmrman CHECK BACKUPSET` 确认"却从没执行过，而手边已经有备份集路径）。
+//    `osLogScan` 仍与 `osFind` 并发，所以最慢的那条并没有被拖长。
 const idxSrc42 = fsmod.readFileSync(path.join(PKG, 'lib', 'index.js'), 'utf8').replace(/^\s*\/\/.*$/gm, '');
 ok(
-  (idxSrc42.match(/await Promise\.all\(\[\s*runBackupsetCheck\(/g) ?? []).length === 2,
-  '★ `backup` 与 `report` 两个 action 都把三条 OS 命令并发发（不许只改一处）',
+  (idxSrc42.match(/await Promise\.all\(\[\s*runBackupLogScan\(/g) ?? []).length === 2,
+  '★ `backup` 与 `report` 两个 action 都把「日志扫描 + 磁盘查找」并发发（不许只改一处）',
+);
+ok(
+  (idxSrc42.match(/const osCheck = await runBackupsetCheck\(/g) ?? []).length === 2,
+  '★ 两个 action 的 `CHECK BACKUPSET` 都在磁盘查找**之后**单独执行（账本为空时才有目标可查）',
+);
+// 把两个 `Promise.all([...])` 的**数组体**切出来看：里面只该有「日志扫描 + 磁盘查找」。
+// （不能用「200 字符内有没有出现」这种正则 —— 注释被抹掉后只剩空行，
+//   后面的 `runBackupsetCheck` 落在字符距离内，会误判成"被塞回了 Promise.all"。）
+const allBodies = idxSrc42
+  .split('await Promise.all([')
+  .slice(1)
+  .map((s) => s.slice(0, s.indexOf(']);')));
+ok(
+  allBodies.length === 2 &&
+    allBodies.every(
+      (b) => b.includes('runBackupLogScan(') && b.includes('runFindBackupsOnDisk(') && !b.includes('runBackupsetCheck('),
+    ),
+  '★ 两处 `Promise.all` 里只有「日志扫描 + 磁盘查找」；`CHECK BACKUPSET` 不在其中（它要等 find 的结果）',
 );
 ok(
   (idxSrc42.match(/Promise\.all\(\s*ssh\.nodes\.map\(async \(node\)/g) ?? []).length === 3,
